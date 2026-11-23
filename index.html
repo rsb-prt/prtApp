@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>PSCPP Estudo</title>
+<style>
+  :root { --bg: #f3f5f9; --card: #fff; --tx: #172033; --mut: #5b6678; --bd: #d7dce5; --pri: #0b5cad; --err: #c62828; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1520; --card: #182131; --tx: #e8edf5; --mut: #9aa6b8; --bd: #2b3749; --pri: #5aa2ff; --err: #ff7b7b; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); color: var(--tx); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; }
+  .card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--bd); border-radius: 14px; padding: 28px 24px; box-shadow: 0 6px 24px rgba(0,0,0,.08); }
+  h1 { font-size: 22px; margin: 0 0 4px; display: flex; gap: 10px; align-items: center; }
+  p { margin: 0 0 18px; color: var(--mut); font-size: 14px; }
+  label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  input[type=password], input[type=text] { width: 100%; font-size: 18px; padding: 10px 12px; border: 1px solid var(--bd); border-radius: 8px; background: var(--bg); color: var(--tx); letter-spacing: .5px; }
+  .lembrar { display: flex; gap: 8px; align-items: center; font-weight: 400; margin: 12px 0 18px; color: var(--mut); }
+  button { width: 100%; font-size: 17px; font-weight: 600; padding: 12px; border: 0; border-radius: 8px; background: var(--pri); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  #msg { min-height: 22px; margin-top: 14px; font-size: 14px; color: var(--mut); }
+  #msg.erro { color: var(--err); }
+  .ver { margin-top: 18px; font-size: 12px; color: var(--mut); text-align: center; }
+</style>
+</head>
+<body>
+<form class="card" id="f" autocomplete="on">
+  <h1>⚓ PSCPP Estudo</h1>
+  <p>Acesso restrito. Digite a sua senha.</p>
+  <input type="text" name="username" value="PSCPP Estudo" autocomplete="username" hidden>
+  <label for="s">Senha</label>
+  <input id="s" type="password" autocomplete="current-password" autocapitalize="none" spellcheck="false" required>
+  <label class="lembrar"><input id="l" type="checkbox" checked> Lembrar neste aparelho</label>
+  <button id="b" type="submit">Entrar</button>
+  <div id="msg" role="status"></div>
+  <div class="ver">versão 2026-11-23b</div>
+</form>
+<script>
+(function () {
+  'use strict';
+  var CH = 'pscpp:web:chave', $ = function (i) { return document.getElementById(i); }, msg = function (t, erro) { $('msg').textContent = t; $('msg').className = erro ? 'erro' : ''; };
+  var sub = window.crypto && window.crypto.subtle;
+  function ler(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function gravar(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+  function b64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  function de64(u) { var s = ''; for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); }
+  function baixar(url) { return fetch(url, { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error('não consegui baixar ' + url + ' (' + r.status + ')'); return r.arrayBuffer(); }); }
+  function decifrar(chave, buf) { var u = new Uint8Array(buf); return sub.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, chave, u.slice(12)); }
+  function abrirGzip(buf) { return new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))); }
+  if (/[?&]sair\b/.test(location.search)) { gravar(CH, null); history.replaceState(null, '', location.pathname); }
+  if (!sub || typeof DecompressionStream === 'undefined') { msg('Este navegador é antigo demais para abrir o app. Atualize o Chrome, o Safari (16.4 ou mais novo) ou o Edge.', true); $('b').disabled = true; return; }
+
+  var manifesto = fetch('chaves.json', { cache: 'no-cache' }).then(function (r) { return r.json(); });
+
+  function chaveDaSenha(senha, M) {
+    var enc = new TextEncoder().encode(senha.normalize('NFC'));
+    return sub.importKey('raw', enc, 'PBKDF2', false, ['deriveKey']).then(function (base) {
+      // testa a senha contra cada entrada de chaves.json (uma por pessoa)
+      return M.senhas.reduce(function (p, e) {
+        return p.then(function (achou) {
+          if (achou) return achou;
+          return sub.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: b64(e.salt), iterations: M.iter }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt'])
+            .then(function (kek) { return decifrar(kek, b64(e.dados).buffer); }).then(function (bruta) { return new Uint8Array(bruta); }, function () { return null; });
+        });
+      }, Promise.resolve(null));
+    });
+  }
+  function abrir(bruta, M, lembrar) {
+    var chave;
+    return sub.importKey('raw', bruta, 'AES-GCM', false, ['decrypt']).then(function (k) {
+      chave = k; var n = M.partes.length + 1, feitos = 0;
+      msg('Abrindo o app… 0 de ' + n);
+      var passo = function (x) { feitos++; msg('Abrindo o app… ' + feitos + ' de ' + n); return x; };
+      return Promise.all([baixar(M.app).then(function (b) { return decifrar(chave, b); }).then(function (z) { return abrirGzip(z).text(); }).then(passo)]
+        .concat(M.partes.map(function (p) { return baixar(p.bin).then(function (b) { return decifrar(chave, b); }).then(function (z) { return abrirGzip(z).blob(); }).then(passo); })));
+    }).then(function (r) {
+      if (lembrar) gravar(CH, de64(bruta)); else gravar(CH, null);
+      var html = r[0];
+      M.partes.forEach(function (p, i) {
+        var url = URL.createObjectURL(new Blob([r[i + 1]], { type: 'text/javascript' }));
+        html = html.replace('<script src="' + p.src + '"><\/script>', '<script src="' + url + '"><\/script>');
+      });
+      document.open(); document.write(html); document.close();
+    });
+  }
+  // aparelho já liberado: abre direto
+  var salva = ler(CH);
+  if (salva) {
+    $('b').disabled = true; msg('Abrindo o app…');
+    manifesto.then(function (M) { return abrir(b64(salva), M, true); }).catch(function () { gravar(CH, null); $('b').disabled = false; msg('A senha guardada não vale mais. Digite a senha.', true); });
+  }
+  $('f').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var senha = $('s').value.trim(); if (!senha) return;
+    $('b').disabled = true; msg('Conferindo a senha…');
+    manifesto.then(function (M) {
+      return chaveDaSenha(senha, M).then(function (bruta) {
+        if (!bruta) { $('b').disabled = false; msg('Senha incorreta.', true); $('s').select(); return; }
+        return abrir(bruta, M, $('l').checked);
+      });
+    }).catch(function (e) { $('b').disabled = false; msg('Erro ao abrir: ' + (e && e.message || e), true); });
+  });
+  $('s').focus();
+})();
+</script>
+</body>
+</html>
